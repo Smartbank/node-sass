@@ -325,15 +325,15 @@ namespace Sass {
         Function_Call_Obj result = SASS_MEMORY_NEW(Function_Call, pstate, "url", args);
 
         if (lex< quoted_string >()) {
-          Expression_Obj the_url = parse_string();
-          args->append(SASS_MEMORY_NEW(Argument, the_url->pstate(), the_url));
+          Expression_Obj quoted_url = parse_string();
+          args->append(SASS_MEMORY_NEW(Argument, quoted_url->pstate(), quoted_url));
         }
-        else if (String_Obj the_url = parse_url_function_argument()) {
-          args->append(SASS_MEMORY_NEW(Argument, the_url->pstate(), the_url));
+        else if (String_Obj string_url = parse_url_function_argument()) {
+          args->append(SASS_MEMORY_NEW(Argument, string_url->pstate(), string_url));
         }
         else if (peek < skip_over_scopes < exactly < '(' >, exactly < ')' > > >(position)) {
-          Expression_Obj the_url = parse_list(); // parse_interpolated_chunk(lexed);
-          args->append(SASS_MEMORY_NEW(Argument, the_url->pstate(), the_url));
+          Expression_Obj braced_url = parse_list(); // parse_interpolated_chunk(lexed);
+          args->append(SASS_MEMORY_NEW(Argument, braced_url->pstate(), braced_url));
         }
         else {
           error("malformed URL", pstate);
@@ -633,7 +633,7 @@ namespace Sass {
   // this is the main entry point for most
   Selector_List_Obj Parser::parse_selector_list(bool chroot)
   {
-    bool reloop = true;
+    bool reloop;
     bool had_linefeed = false;
     Complex_Selector_Obj sel;
     Selector_List_Obj group = SASS_MEMORY_NEW(Selector_List, pstate);
@@ -689,7 +689,7 @@ namespace Sass {
   Complex_Selector_Obj Parser::parse_complex_selector(bool chroot)
   {
 
-    String_Ptr reference = 0;
+    String_Obj reference = 0;
     lex < block_comment >();
     advanceToNextToken();
     Complex_Selector_Obj sel = SASS_MEMORY_NEW(Complex_Selector, pstate);
@@ -911,8 +911,8 @@ namespace Sass {
           >()
       ) {
         lex_css< alternatives < static_value, binomial > >();
-        String_Constant_Ptr expr = SASS_MEMORY_NEW(String_Constant, pstate, lexed);
-        if (expr && lex_css< exactly<')'> >()) {
+        String_Constant_Obj expr = SASS_MEMORY_NEW(String_Constant, pstate, lexed);
+        if (lex_css< exactly<')'> >()) {
           expr->can_compress_whitespace(true);
           return SASS_MEMORY_NEW(Pseudo_Selector, p, name, expr);
         }
@@ -1062,12 +1062,12 @@ namespace Sass {
       if (peek_css< exactly<')'> >(position))
       { break; }
 
-      Expression_Obj key = parse_space_list();
+      key = parse_space_list();
 
       if (!(lex< exactly<':'> >()))
       { css_error("Invalid CSS", " after ", ": expected \":\", was "); }
 
-      Expression_Obj value = parse_space_list();
+      value = parse_space_list();
 
       map->append(key);
       map->append(value);
@@ -1272,7 +1272,6 @@ namespace Sass {
       bool right_ws = peek < css_comments >() != NULL;
       operators.push_back({ op, left_ws, right_ws });
       operands.push_back(parse_expression());
-      left_ws = peek < css_comments >() != NULL;
     }
     // we are called recursively for list, so we first
     // fold inner binary expression which has delayed
@@ -1350,7 +1349,7 @@ namespace Sass {
         case '*': operators.push_back({ Sass_OP::MUL, left_ws != 0, right_ws != 0 }); break;
         case '/': operators.push_back({ Sass_OP::DIV, left_ws != 0, right_ws != 0 }); break;
         case '%': operators.push_back({ Sass_OP::MOD, left_ws != 0, right_ws != 0 }); break;
-        default: throw std::runtime_error("unknown static op parsed"); break;
+        default: throw std::runtime_error("unknown static op parsed");
       }
       operands.push_back(parse_factor());
       left_ws = peek < css_comments >();
@@ -1443,6 +1442,107 @@ namespace Sass {
     }
   }
 
+  bool number_has_zero(const std::string& parsed)
+  {
+    size_t L = parsed.length();
+    return !( (L > 0 && parsed.substr(0, 1) == ".") ||
+              (L > 1 && parsed.substr(0, 2) == "0.") ||
+              (L > 1 && parsed.substr(0, 2) == "-.")  ||
+              (L > 2 && parsed.substr(0, 3) == "-0.") );
+  }
+
+  Number_Ptr Parser::lexed_number(const ParserState& pstate, const std::string& parsed)
+  {
+    Number_Ptr nr = SASS_MEMORY_NEW(Number,
+                                    pstate,
+                                    sass_atof(parsed.c_str()),
+                                    "",
+                                    number_has_zero(parsed));
+    nr->is_interpolant(false);
+    nr->is_delayed(true);
+    return nr;
+  }
+
+  Number_Ptr Parser::lexed_percentage(const ParserState& pstate, const std::string& parsed)
+  {
+    Number_Ptr nr = SASS_MEMORY_NEW(Number,
+                                    pstate,
+                                    sass_atof(parsed.c_str()),
+                                    "%",
+                                    true);
+    nr->is_interpolant(false);
+    nr->is_delayed(true);
+    return nr;
+  }
+
+  Number_Ptr Parser::lexed_dimension(const ParserState& pstate, const std::string& parsed)
+  {
+    size_t L = parsed.length();
+    size_t num_pos = parsed.find_first_not_of(" \n\r\t");
+    if (num_pos == std::string::npos) num_pos = L;
+    size_t unit_pos = parsed.find_first_not_of("-+0123456789.", num_pos);
+    if (unit_pos == std::string::npos) unit_pos = L;
+    const std::string& num = parsed.substr(num_pos, unit_pos - num_pos);
+    Number_Ptr nr = SASS_MEMORY_NEW(Number,
+                                    pstate,
+                                    sass_atof(num.c_str()),
+                                    Token(number(parsed.c_str())),
+                                    number_has_zero(parsed));
+    nr->is_interpolant(false);
+    nr->is_delayed(true);
+    return nr;
+  }
+
+  Expression_Ptr Parser::lexed_hex_color(const ParserState& pstate, const std::string& parsed)
+  {
+    Color_Ptr color = NULL;
+    if (parsed[0] != '#') {
+      return SASS_MEMORY_NEW(String_Quoted, pstate, parsed);
+    }
+    // chop off the '#'
+    std::string hext(parsed.substr(1));
+    if (parsed.length() == 4) {
+      std::string r(2, parsed[1]);
+      std::string g(2, parsed[2]);
+      std::string b(2, parsed[3]);
+      color = SASS_MEMORY_NEW(Color,
+                               pstate,
+                               static_cast<double>(strtol(r.c_str(), NULL, 16)),
+                               static_cast<double>(strtol(g.c_str(), NULL, 16)),
+                               static_cast<double>(strtol(b.c_str(), NULL, 16)),
+                               1, // alpha channel
+                               parsed);
+    }
+    else if (parsed.length() == 7) {
+      std::string r(parsed.substr(1,2));
+      std::string g(parsed.substr(3,2));
+      std::string b(parsed.substr(5,2));
+      color = SASS_MEMORY_NEW(Color,
+                               pstate,
+                               static_cast<double>(strtol(r.c_str(), NULL, 16)),
+                               static_cast<double>(strtol(g.c_str(), NULL, 16)),
+                               static_cast<double>(strtol(b.c_str(), NULL, 16)),
+                               1, // alpha channel
+                               parsed);
+    }
+    else if (parsed.length() == 9) {
+      std::string r(parsed.substr(1,2));
+      std::string g(parsed.substr(3,2));
+      std::string b(parsed.substr(5,2));
+      std::string a(parsed.substr(7,2));
+      color = SASS_MEMORY_NEW(Color,
+                               pstate,
+                               static_cast<double>(strtol(r.c_str(), NULL, 16)),
+                               static_cast<double>(strtol(g.c_str(), NULL, 16)),
+                               static_cast<double>(strtol(b.c_str(), NULL, 16)),
+                               static_cast<double>(strtol(a.c_str(), NULL, 16)) / 255,
+                               parsed);
+    }
+    color->is_interpolant(false);
+    color->is_delayed(false);
+    return color;
+  }
+
   // parse one value for a list
   Expression_Obj Parser::parse_value()
   {
@@ -1456,10 +1556,10 @@ namespace Sass {
 
     // parse `10%4px` into separated items and not a schema
     if (lex< sequence < percentage, lookahead < number > > >())
-    { return SASS_MEMORY_NEW(Textual, pstate, Textual::PERCENTAGE, lexed); }
+    { return lexed_percentage(lexed); }
 
     if (lex< sequence < number, lookahead< sequence < op, number > > > >())
-    { return SASS_MEMORY_NEW(Textual, pstate, Textual::NUMBER, lexed); }
+    { return lexed_number(lexed); }
 
     // string may be interpolated
     if (lex< sequence < quoted_string, lookahead < exactly <'-'> > > >())
@@ -1486,11 +1586,11 @@ namespace Sass {
     }
 
     if (lex< percentage >())
-    { return SASS_MEMORY_NEW(Textual, pstate, Textual::PERCENTAGE, lexed); }
+    { return lexed_percentage(lexed); }
 
     // match hex number first because 0x000 looks like a number followed by an identifier
     if (lex< sequence < alternatives< hex, hex0 >, negate < exactly<'-'> > > >())
-    { return SASS_MEMORY_NEW(Textual, pstate, Textual::HEX, lexed); }
+    { return lexed_hex_color(lexed); }
 
     if (lex< sequence < exactly <'#'>, identifier > >())
     { return SASS_MEMORY_NEW(String_Quoted, pstate, lexed); }
@@ -1498,13 +1598,13 @@ namespace Sass {
     // also handle the 10em- foo special case
     // alternatives < exactly < '.' >, .. > -- `1.5em-.75em` is split into a list, not a binary expression
     if (lex< sequence< dimension, optional< sequence< exactly<'-'>, lookahead< alternatives < space > > > > > >())
-    { return SASS_MEMORY_NEW(Textual, pstate, Textual::DIMENSION, lexed); }
+    { return lexed_dimension(lexed); }
 
     if (lex< sequence< static_component, one_plus< strict_identifier > > >())
     { return SASS_MEMORY_NEW(String_Constant, pstate, lexed); }
 
     if (lex< number >())
-    { return SASS_MEMORY_NEW(Textual, pstate, Textual::NUMBER, lexed); }
+    { return lexed_number(lexed); }
 
     if (lex< variable >())
     { return SASS_MEMORY_NEW(Variable, pstate, Util::normalize_underscores(lexed)); }
@@ -1648,7 +1748,11 @@ namespace Sass {
     lex< exactly<'='> >();
     kwd_arg->append(SASS_MEMORY_NEW(String_Constant, pstate, lexed));
     if (peek< variable >()) kwd_arg->append(parse_list());
-    else if (lex< number >()) kwd_arg->append(SASS_MEMORY_NEW(Textual, pstate, Textual::NUMBER, Util::normalize_decimals(lexed)));
+    else if (lex< number >()) {
+      std::string parsed(lexed);
+      Util::normalize_decimals(parsed);
+      kwd_arg->append(lexed_number(parsed));
+    }
     else if (peek < ie_keyword_arg_value >()) { kwd_arg->append(parse_list()); }
     return kwd_arg;
   }
@@ -1662,7 +1766,7 @@ namespace Sass {
       css_error("Invalid CSS", " after ", ": expected expression (e.g. 1px, bold), was ");
     }
 
-    const char* e = 0;
+    const char* e;
     const char* ee = end;
     end = stop;
     size_t num_items = 0;
@@ -1685,7 +1789,7 @@ namespace Sass {
         if (peek< exactly< rbrace > >()) {
           css_error("Invalid CSS", " after ", ": expected expression (e.g. 1px, bold), was ");
         }
-        Expression_Obj ex = 0;
+        Expression_Obj ex;
         if (lex< re_static_expression >()) {
           ex = SASS_MEMORY_NEW(String_Constant, pstate, lexed);
         } else {
@@ -1726,19 +1830,19 @@ namespace Sass {
       }
       // lex percentage value
       else if (lex< percentage >()) {
-        schema->append(SASS_MEMORY_NEW(Textual, pstate, Textual::PERCENTAGE, lexed));
+        schema->append(lexed_percentage(lexed));
       }
       // lex dimension value
       else if (lex< dimension >()) {
-        schema->append(SASS_MEMORY_NEW(Textual, pstate, Textual::DIMENSION, lexed));
+        schema->append(lexed_dimension(lexed));
       }
       // lex number value
       else if (lex< number >()) {
-        schema->append( SASS_MEMORY_NEW(Textual, pstate, Textual::NUMBER, lexed));
+        schema->append(lexed_number(lexed));
       }
       // lex hex color value
       else if (lex< sequence < hex, negate < exactly < '-' > > > >()) {
-        schema->append(SASS_MEMORY_NEW(Textual, pstate, Textual::HEX, lexed));
+        schema->append(lexed_hex_color(lexed));
       }
       else if (lex< sequence < exactly <'#'>, identifier > >()) {
         schema->append(SASS_MEMORY_NEW(String_Quoted, pstate, lexed));
@@ -2083,7 +2187,7 @@ namespace Sass {
     if (!lex_css< exactly<'('> >()) {
       error("media query expression must begin with '('", pstate);
     }
-    Expression_Obj feature = 0;
+    Expression_Obj feature;
     if (peek_css< exactly<')'> >()) {
       error("media feature required in media query expression", pstate);
     }
@@ -2117,7 +2221,7 @@ namespace Sass {
   Supports_Condition_Obj Parser::parse_supports_condition()
   {
     lex < css_whitespace >();
-    Supports_Condition_Obj cond = 0;
+    Supports_Condition_Obj cond;
     if ((cond = parse_supports_negation())) return cond;
     if ((cond = parse_supports_operator())) return cond;
     if ((cond = parse_supports_interpolation())) return cond;
@@ -2164,7 +2268,7 @@ namespace Sass {
   // look like declarations their semantics differ significantly
   Supports_Condition_Obj Parser::parse_supports_declaration()
   {
-    Supports_Condition_Ptr cond = 0;
+    Supports_Condition_Ptr cond;
     // parse something declaration like
     Declaration_Obj declaration = parse_declaration();
     if (!declaration) error("@supports condition expected declaration", pstate);
@@ -2334,7 +2438,7 @@ namespace Sass {
 
   Expression_Obj Parser::lex_interp_string()
   {
-    Expression_Obj rv = 0;
+    Expression_Obj rv;
     if ((rv = lex_interp< re_string_double_open, re_string_double_close >())) return rv;
     if ((rv = lex_interp< re_string_single_open, re_string_single_close >())) return rv;
     return rv;
@@ -2394,7 +2498,7 @@ namespace Sass {
 
   Expression_Obj Parser::lex_almost_any_value_token()
   {
-    Expression_Obj rv = 0;
+    Expression_Obj rv;
     if (*position == 0) return 0;
     if ((rv = lex_almost_any_value_chars())) return rv;
     // if ((rv = lex_block_comment())) return rv;
@@ -2659,6 +2763,7 @@ namespace Sass {
       skip = check_bom_chars(source, end, gb_18030_bom, 4);
       encoding = "GB-18030";
       break;
+    default: break;
     }
     if (skip > 0 && !utf_8) error("only UTF-8 documents are currently supported; your document appears to be " + encoding, pstate);
     position += skip;

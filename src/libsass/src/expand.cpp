@@ -176,18 +176,19 @@ namespace Sass {
 
   Statement_Ptr Expand::operator()(Media_Block_Ptr m)
   {
-    media_block_stack.push_back(m);
-    Expression_Obj mq = m->media_queries()->perform(&eval);
+    Media_Block_Ptr cpy = m->copy();
+    Expression_Obj mq = eval(m->media_queries());
     std::string str_mq(mq->to_string(ctx.c_options));
     char* str = sass_copy_c_string(str_mq.c_str());
     ctx.strings.push_back(str);
     Parser p(Parser::from_c_str(str, ctx, mq->pstate()));
     mq = p.parse_media_queries(); // re-assign now
-    List_Obj ls = Cast<List>(mq->perform(&eval));
+    cpy->media_queries(mq);
+    media_block_stack.push_back(cpy);
     Block_Obj blk = operator()(m->block());
     Media_Block_Ptr mm = SASS_MEMORY_NEW(Media_Block,
                                       m->pstate(),
-                                      ls,
+                                      mq,
                                       blk);
     media_block_stack.pop_back();
     mm->tabs(m->tabs());
@@ -264,7 +265,7 @@ namespace Sass {
   Statement_Ptr Expand::operator()(Assignment_Ptr a)
   {
     Env* env = environment();
-    std::string var(a->variable());
+    const std::string& var(a->variable());
     if (a->is_global()) {
       if (a->is_default()) {
         if (env->has_global(var)) {
@@ -434,16 +435,13 @@ namespace Sass {
     Env env(environment(), true);
     env_stack.push_back(&env);
     call_stack.push_back(f);
-    Number_Obj it = SASS_MEMORY_NEW(Number, low->pstate(), start, sass_end->unit());
-    env.set_local(variable, it);
     Block_Ptr body = f->block();
     if (start < end) {
       if (f->is_inclusive()) ++end;
       for (double i = start;
            i < end;
            ++i) {
-        it = SASS_MEMORY_COPY(it);
-        it->value(i);
+        Number_Obj it = SASS_MEMORY_NEW(Number, low->pstate(), i, sass_end->unit());
         env.set_local(variable, it);
         append_block(body);
       }
@@ -452,8 +450,7 @@ namespace Sass {
       for (double i = start;
            i > end;
            --i) {
-        it = SASS_MEMORY_COPY(it);
-        it->value(i);
+        Number_Obj it = SASS_MEMORY_NEW(Number, low->pstate(), i, sass_end->unit());
         env.set_local(variable, it);
         append_block(body);
       }
@@ -515,11 +512,11 @@ namespace Sass {
         list = Cast<List>(list);
       }
       for (size_t i = 0, L = list->length(); i < L; ++i) {
-        Expression_Obj e = list->at(i);
+        Expression_Obj item = list->at(i);
         // unwrap value if the expression is an argument
-        if (Argument_Obj arg = Cast<Argument>(e)) e = arg->value();
+        if (Argument_Obj arg = Cast<Argument>(item)) item = arg->value();
         // check if we got passed a list of args (investigate)
-        if (List_Obj scalars = Cast<List>(e)) {
+        if (List_Obj scalars = Cast<List>(item)) {
           if (variables.size() == 1) {
             List_Obj var = scalars;
             // if (arglist) var = (*scalars)[0];
@@ -534,7 +531,7 @@ namespace Sass {
           }
         } else {
           if (variables.size() > 0) {
-            env.set_local(variables.at(0), e);
+            env.set_local(variables.at(0), item);
             for (size_t j = 1, K = variables.size(); j < K; ++j) {
               Expression_Obj res = SASS_MEMORY_NEW(Null, expr->pstate());
               env.set_local(variables[j], res);
@@ -598,8 +595,8 @@ namespace Sass {
         std::string sel_str(contextualized->to_string(ctx.c_options));
         error("Can't extend " + sel_str + ": can't extend nested selectors", c->pstate(), backtrace());
       }
-      Compound_Selector_Obj placeholder = c->head();
-      if (contextualized->is_optional()) placeholder->is_optional(true);
+      Compound_Selector_Obj target = c->head();
+      if (contextualized->is_optional()) target->is_optional(true);
       for (size_t i = 0, L = extender->length(); i < L; ++i) {
         Complex_Selector_Obj sel = (*extender)[i];
         if (!(sel->head() && sel->head()->length() > 0 &&
@@ -618,7 +615,7 @@ namespace Sass {
           sel = ssel;
         }
         // if (c->has_line_feed()) sel->has_line_feed(true);
-        ctx.subset_map.put(placeholder, std::make_pair(sel, placeholder));
+        ctx.subset_map.put(target, std::make_pair(sel, target));
       }
     }
 

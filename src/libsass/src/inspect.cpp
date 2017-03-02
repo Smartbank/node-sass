@@ -15,7 +15,7 @@
 
 namespace Sass {
 
-  Inspect::Inspect(Emitter emi)
+  Inspect::Inspect(const Emitter& emi)
   : Emitter(emi)
   { }
   Inspect::~Inspect() { }
@@ -354,6 +354,8 @@ namespace Sass {
       if (items_output) append_comma_separator();
       key->perform(this);
       append_colon_separator();
+      LOCAL_FLAG(in_space_array, true);
+      LOCAL_FLAG(in_comma_array, true);
       map->at(key)->perform(this);
       items_output = true;
     }
@@ -515,11 +517,6 @@ namespace Sass {
   void Inspect::operator()(Variable_Ptr var)
   {
     append_token(var->name(), var);
-  }
-
-  void Inspect::operator()(Textual_Ptr txt)
-  {
-    append_token(txt->value(), txt);
   }
 
   void Inspect::operator()(Number_Ptr n)
@@ -1038,6 +1035,7 @@ namespace Sass {
         if (tail) append_mandatory_space();
         else append_optional_space();
       break;
+      default: break;
     }
     if (tail && comb != Complex_Selector::ANCESTOR_OF) {
       if (c->has_line_break()) append_optional_linefeed();
